@@ -53,9 +53,9 @@ class Vocab(object):
             alphabet_to_i = {}
             i_to_alphabet = {}
 
-            for i, alphabet in enumerate(self.alphabet[key]):
-                alphabet_to_i[alphabet] = i
-                i_to_alphabet[i] = alphabet
+            for i, alpha in enumerate(self.alphabet[key]):
+                alphabet_to_i[alpha] = i
+                i_to_alphabet[i] = alpha
 
             alphabet_to_token[key] = alphabet_to_i
             token_to_alphabet[key] = i_to_alphabet
@@ -106,16 +106,14 @@ def tokenize_protocol(protocol: List[Dict[str, float]], vocab: Vocab) -> List[Di
 def tokenize_tensor(tensor: torch.Tensor, vocab: Vocab) -> torch.Tensor:
     tokenized_tensor = torch.zeros(tensor.shape[0], tensor.shape[1], dtype=int)
 
-    # print("tensor = " + str(tensor))
-    for i, pressures_t in enumerate(tensor):
-        for j, pressure in enumerate(pressures_t):
-            projected_pr_list = np.array(vocab.alphabet[vocab.index_alphabet[j]])
-            distances = np.abs(projected_pr_list - pressure.item())
+    for i, alphabet_t in enumerate(tensor):
+        for j, alpha in enumerate(alphabet_t):
+            projected_alpha_list = np.array(vocab.alphabet[vocab.index_alphabet[j]])
+            distances = np.abs(projected_alpha_list - alpha.item())
             min_arg = np.argmin(distances)
-            projection = projected_pr_list[min_arg]
+            projection = projected_alpha_list[min_arg]
             tokenized_tensor[i, j] = vocab.alphabet_to_token[vocab.index_alphabet[j]][projection]
 
-    # print("tokenized tensor = " + str(tokenized_tensor))
     return tokenized_tensor
 
 
@@ -145,7 +143,6 @@ def compute_reward_distribution(
     reward_func: Callable,
     seq_len: int,
     init_protocol: OrderedDict,
-    # vocab: Vocab,
 ):
     # Get possible protocols
     possible_protocols = get_possible_protocols(alphabets, seq_len, init_protocol)
@@ -157,7 +154,7 @@ def compute_reward_distribution(
     dataset = []
 
     for i, protocol in enumerate(possible_protocols):
-        protocol_to_numpy = np.array([np.array(list(alphabet.values())) for alphabet in protocol])
+        protocol_to_numpy = np.array([np.array(list(alpha.values())) for alpha in protocol])
         protocol_tensor = torch.from_numpy(protocol_to_numpy).float()
         dataset.append(protocol_to_numpy)
         tensor_to_key[str(protocol_to_numpy)] = i
@@ -168,16 +165,16 @@ def compute_reward_distribution(
 
 
 class TBModelClosedLoop(nn.Module):
-    def __init__(self, vocab: Vocab, seq_len: int, num_pressures: int, num_tokens: int, num_hid: int):
+    def __init__(self, vocab: Vocab, seq_len: int, num_alphabets: int, num_tokens: int, num_hid: int):
         super().__init__()
-        # The input dimension is seq_len * num_pressures * num_tokens.
+        # The input dimension is seq_len * num_alphabets * num_tokens.
         self.vocab = vocab
         self.seq_len = seq_len
-        self.num_pressures = num_pressures
+        self.num_alphabets = num_alphabets
         self.num_tokens = num_tokens
 
-        self.input_dim = self.seq_len * self.num_pressures * self.num_tokens
-        self.output_dim = self.seq_len * self.num_pressures * self.num_tokens
+        self.input_dim = self.seq_len * self.num_alphabets * self.num_tokens
+        self.output_dim = self.seq_len * self.num_alphabets * self.num_tokens
 
         self.mlp = nn.Sequential(
             nn.Linear(self.input_dim, num_hid),
@@ -187,9 +184,6 @@ class TBModelClosedLoop(nn.Module):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # for key in self.vocab.mask_pr.keys():
-        #     self.vocab.mask_pr[key] = self.vocab.mask_pr[key].to(self.device)
-
         # logZ is just a single number
         self.logZ_nn = nn.Parameter(torch.ones(1))
 
@@ -197,9 +191,9 @@ class TBModelClosedLoop(nn.Module):
     def logZ(self):
         return self.logZ_nn
 
-    def forward(self, state, t, pr):
+    def forward(self, state, t, alpha):
 
-        input_mlp = state.view(-1, self.seq_len * self.num_pressures * self.num_tokens)
+        input_mlp = state.view(-1, self.seq_len * self.num_alphabets * self.num_tokens)
         logits = self.mlp(input_mlp)
 
         # Slice the logits, and mask invalid actions (since we're predicting
@@ -207,18 +201,18 @@ class TBModelClosedLoop(nn.Module):
         P_F = logits[..., : self.output_dim]  # * (1 - x) + x * -100
 
         # Mask forward
-        mask_forward = torch.zeros(self.seq_len, self.num_pressures, 1)  # .to(self.device)
-        mask_forward[t, pr] = 1
+        mask_forward = torch.zeros(self.seq_len, self.num_alphabets, 1)  # .to(self.device)
+        mask_forward[t, alpha] = 1
         mask_forward[0] = 0
 
         P_F = (
-            P_F.reshape(-1, self.seq_len, self.num_pressures, self.num_tokens) * (mask_forward)
+            P_F.reshape(-1, self.seq_len, self.num_alphabets, self.num_tokens) * (mask_forward)
             + (1 - mask_forward) * -1000
         )
 
-        mask_pr = self.vocab.mask_alpha[pr]
+        mask_alpha = self.vocab.mask_alpha[alpha]
 
-        P_F[:, t, pr] = P_F[:, t, pr] * mask_pr + (1 - mask_pr) * -1000
+        P_F[:, t, alpha] = P_F[:, t, alpha] * mask_alpha + (1 - mask_alpha) * -1000
 
         return P_F.view(-1)
 
@@ -226,7 +220,7 @@ class TBModelClosedLoop(nn.Module):
 class FlowGenerator(nn.Module):
     def __init__(
         self,
-        pressure_set: Mapping[str, List],
+        alphabet: Mapping[str, List],
         seq_len: int,
         gamma: float = 0.5,
         delta: float = 0.1,
@@ -239,16 +233,16 @@ class FlowGenerator(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.pressure_set = pressure_set
+        self.alphabet = alphabet
         self.seq_len = seq_len
 
-        self.num_pressures = len(pressure_set)
-        self.vocab = Vocab(alphabet=pressure_set)
+        self.num_alphabet = len(alphabet)
+        self.vocab = Vocab(alphabet=alphabet)
         self.num_tokens = self.vocab.num_tokens
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.model = TBModelClosedLoop(
-            self.vocab, self.seq_len, self.num_pressures, self.num_tokens, num_hid
+            self.vocab, self.seq_len, self.num_alphabet, self.num_tokens, num_hid
         )
         self.opt = torch.optim.Adam(self.model.parameters(), lr)
 
@@ -266,14 +260,14 @@ class FlowGenerator(nn.Module):
 
         tokenized_protocol = tokenize_protocol([init_protocol], self.vocab)
         protocol_tensor = torch.tensor(tokenized_protocol, dtype=torch.long)
-        init_pressures = F.one_hot(protocol_tensor, num_classes=self.num_tokens)
-        init_state = torch.zeros(self.seq_len, self.num_pressures, self.num_tokens)
-        init_state[0] = init_pressures
+        init_alphabet = F.one_hot(protocol_tensor, num_classes=self.num_tokens)
+        init_state = torch.zeros(self.seq_len, self.num_alphabet, self.num_tokens)
+        init_state[0] = init_alphabet
 
         return init_state
 
     def one_hot_encode(self, protocols: torch.Tensor) -> torch.Tensor:
-        protocols_one_hot = torch.zeros(protocols.shape[0], self.seq_len, self.num_pressures, self.num_tokens)
+        protocols_one_hot = torch.zeros(protocols.shape[0], self.seq_len, self.num_alphabet, self.num_tokens)
 
         for i in range(protocols_one_hot.shape[0]):
             token_tensor = tokenize_tensor(protocols[i], self.vocab)
@@ -283,7 +277,7 @@ class FlowGenerator(nn.Module):
 
     def get_initial_state(self) -> torch.Tensor:
         # Each episode starts with an "empty state" except for the first
-        state = torch.zeros(self.seq_len, self.num_pressures, self.num_tokens)
+        state = torch.zeros(self.seq_len, self.num_alphabet, self.num_tokens)
         state[0] = self.experience_buffer[0][0]
 
         return state
@@ -334,41 +328,36 @@ class FlowGenerator(nn.Module):
 
                 # Each episode starts with an "empty state" except for the first
                 state = torch.zeros(
-                    len(minibatch_trajs), self.seq_len, self.num_pressures, self.num_tokens
-                )  # .to(self.device)
+                    len(minibatch_trajs), self.seq_len, self.num_alphabet, self.num_tokens
+                )
                 state[:, 0] = minibatch_trajs[:, 0]
 
                 # Define total P_F
                 # total_P_F = 0
-                total_P_F = torch.zeros(len(minibatch_trajs))  # .to(self.device)
-                rewards = torch.zeros(len(minibatch_trajs))  # .to(self.device)
+                total_P_F = torch.zeros(len(minibatch_trajs))
+                rewards = torch.zeros(len(minibatch_trajs))
 
                 for t in range(t_start, self.seq_len):
-                    for pr in range(self.num_pressures):
+                    for alpha in range(self.num_alphabet):
 
-                        P_F_s = self.model(state, t, pr)
-                        action = torch.argmax(minibatch_trajs[:, t, pr], dim=1)
+                        P_F_s = self.model(state, t, alpha)
+                        action = torch.argmax(minibatch_trajs[:, t, alpha], dim=1)
 
                         # "Go" to the next state
                         new_state = state.detach().clone()
-                        new_state[:, t, pr] = F.one_hot(action, num_classes=self.num_tokens)
+                        new_state[:, t, alpha] = F.one_hot(action, num_classes=self.num_tokens)
 
-                        P_F_s_reshape = P_F_s.reshape(-1, self.seq_len, self.num_pressures, self.num_tokens)
-                        cat = Categorical(logits=P_F_s_reshape[:, t, pr])
+                        P_F_s_reshape = P_F_s.reshape(-1, self.seq_len, self.num_alphabet, self.num_tokens)
+                        cat = Categorical(logits=P_F_s_reshape[:, t, alpha])
 
                         # Accumulate the P_F sum
                         total_P_F += cat.log_prob(action)
 
-                        if t == self.seq_len - 1 and pr == self.num_pressures - 1:
-                            # # If we've built a complete state.
-                            # check = self.check_state(new_state)
-                            # if check:
+                        if t == self.seq_len - 1 and alpha == self.num_alphabet - 1:
                             for r in range(len(rewards)):
                                 rewards[r] = reward_func(
                                     torch.from_numpy(state_to_protocol(minibatch_trajs[r], self.vocab)).float()
                                 )
-                            # else:
-                            #     raise ValueError("State is not valid")
 
                         # Continue to next iteration with updated state
                         state = new_state
@@ -410,29 +399,6 @@ class FlowGenerator(nn.Module):
 
         return tb_losses, tb_mean_loss, logZs
 
-    # def run_heuristic_checks(self, state, trajectories):
-    #     # Check if protocol already exists in trajectories
-    #     if len(trajectories) > 0:
-    #         protocol_exists = utils.check_protocol_buffer(state, trajectories)
-    #     else:
-    #         protocol_exists = False
-
-    #     if protocol_exists:
-    #         return protocol_exists
-
-    #     # Check if protocol already ran in experience buffer
-    #     protocol_ran = utils.check_protocol_buffer(state, self.experience_buffer)
-
-    #     if protocol_ran:
-    #         return protocol_ran
-
-    #     # Check for consecutive repeating envs if not in test
-    #     if not self.test:
-    #         repeating = utils.check_repeating_environments(state)
-
-    #         if repeating:
-    #             return repeating
-
     def generate_minibatch(self, t_start: int = 1):
 
         # Define torch tensor for online trajectories
@@ -457,10 +423,8 @@ class FlowGenerator(nn.Module):
                 break
 
             for t in range(t_start, self.seq_len):
-                for pr in range(self.num_pressures):
-                    # mask_pr = self.vocab.mask_pr[pr].to(self.device)
-
-                    P_F_s = self.model(state, t, pr)
+                for alpha in range(self.num_alphabet):
+                    P_F_s = self.model(state, t, alpha)
 
                     # Here P_F is logits, so we want the Categorical to compute the softmax for us
                     cat = Categorical(logits=P_F_s)
@@ -471,28 +435,13 @@ class FlowGenerator(nn.Module):
                         action = cat.sample()
 
                     # "Go" to the next state
-                    # state.view(-1, self.seq_len * self.num_pressures * self.num_tokens)
-                    new_state = state.detach().clone().view(-1, self.seq_len * self.num_pressures * self.num_tokens)
+                    # state.view(-1, self.seq_len * self.num_alphabet * self.num_tokens)
+                    new_state = state.detach().clone().view(-1, self.seq_len * self.num_alphabet * self.num_tokens)
                     new_state[:, action] = 1
-                    new_state = new_state.reshape(-1, self.seq_len, self.num_pressures, self.num_tokens)
+                    new_state = new_state.reshape(-1, self.seq_len, self.num_alphabet, self.num_tokens)
 
                     # Continue to next iteration with updated state
                     state = new_state
-
-            # state = state.squeeze(0)
-
-            # # Check if protocol already exists in trajectories or experience buffer
-            # heuristic_check = self.run_heuristic_checks(state, trajectories)
-
-            # if heuristic_check:
-            #     continue
-
-            # # Check for consecutive repeating envs if not in test mode
-            # if not self.test:
-            #     repeating = utils.check_repeating_environments(state.squeeze(0))
-
-            #     if repeating:
-            #         continue
 
             # Check if we've built a complete state.
             check = self.check_state(state)
@@ -516,15 +465,14 @@ class FlowGenerator(nn.Module):
         with torch.no_grad():
             self.model.eval()
 
-            tb_sampled_protocols = []  # torch.zeros(sample_len, self.seq_len, self.num_pressures)
+            tb_sampled_protocols = []
 
             max_attempts = sample_len * 5
             attempts = 0
 
-            # for s in range(sample_len):
             while len(tb_sampled_protocols) < sample_len:
                 attempts += 1
-                state = self.get_initial_state()  # .to(self.device)
+                state = self.get_initial_state()
 
                 if attempts >= max_attempts:
                     if self.verbose:
@@ -533,10 +481,9 @@ class FlowGenerator(nn.Module):
                     break
 
                 for t in range(t_start, self.seq_len):
-                    for pr in range(self.num_pressures):
-                        # mask_pr = self.vocab.mask_pr[pr].to(self.device)
+                    for alpha in range(self.num_alphabet):
 
-                        P_F_s = self.model(state, t, pr)
+                        P_F_s = self.model(state, t, alpha)
 
                         # Here P_F is logits, so we want the Categorical to compute the softmax for us
                         cat = Categorical(logits=P_F_s)
@@ -545,17 +492,10 @@ class FlowGenerator(nn.Module):
                         # "Go" to the next state
                         new_state = state.detach().clone().view(-1)
                         new_state[action] = 1
-                        new_state = new_state.reshape(self.seq_len, self.num_pressures, self.num_tokens)
+                        new_state = new_state.reshape(self.seq_len, self.num_alphabet, self.num_tokens)
 
                         # Continue to next iteration with updated state
                         state = new_state
-
-                # if not self.test:
-                #     # Check if protocol already exists in trajectories or experience buffer
-                #     heuristic_check = self.run_heuristic_checks(state, tb_sampled_protocols)
-
-                #     if heuristic_check:
-                #         continue
 
                 # Append sampled protocol to list
                 tb_sampled_protocols.append(state)

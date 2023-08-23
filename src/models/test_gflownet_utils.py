@@ -9,14 +9,13 @@ from src.models.gflownet_utils import (
 )
 import matplotlib.pyplot as pp
 import numpy as np
-# from maia.algorithms.utils_train import StandardDataset
 
 # Get initial state
 def reward_func(protocol):
 
-    state_1 = torch.tensor([[0, 0], [1.5, 0.5], [1.5, 0.5]])
-    state_2 = torch.tensor([[0, 0], [0, 0], [0, 0]])
-    state_3 = torch.tensor([[0, 0], [0.5, 0.5], [0.5, 0.5]])
+    state_1 = torch.tensor([[0], [1], [1]])
+    state_2 = torch.tensor([[0], [0], [0]])
+    state_3 = torch.tensor([[0], [3], [3]])
 
     match_1 = torch.all(protocol == state_1).item()
     match_2 = torch.all(protocol == state_2).item()
@@ -39,11 +38,11 @@ def reward_func(protocol):
 
 
 # %%
-# Running simplest test example
+# Running simplest test exampleß
 alphabet_set = OrderedDict(
     {
-        "ox": [0.0, 0.5, 1.5],
-        "ph": [0.0, 0.5],
+        "bases": [0, 1, 2, 3],
+        # "alphabet #2": [0.0, 0.5],
     }
 )
 
@@ -57,7 +56,7 @@ vocab.alphabet
 seq_len = 3
 num_pressures = len(alphabet_set)
 num_tokens = vocab.num_tokens
-init_protocol = OrderedDict({"ox": 0.0, "ph": 0.0})  # , "stir": 0.0, "temp": 0.0})
+init_protocol = OrderedDict({"bases": 0})
 reward_distribution, empirical_reward_distribution, dataset_np, tensor_to_key = compute_reward_distribution(
     alphabet_set, reward_func, seq_len, init_protocol
 )
