@@ -53,7 +53,7 @@ class Vocab(object):
             alphabet_to_i = {}
             i_to_alphabet = {}
 
-            for i, alphabet in enumerate(self.alphabet[key].values):
+            for i, alphabet in enumerate(self.alphabet[key]):
                 alphabet_to_i[alphabet] = i
                 i_to_alphabet[i] = alphabet
 
@@ -62,30 +62,31 @@ class Vocab(object):
             alphabet_index[key] = index
             index_alphabet[index] = key
 
-            self.max_alphabet_len = max(self.max_alphabet_len, len(self.alphabet[key].values))
+            self.max_alphabet_len = max(self.max_alphabet_len, len(self.alphabet[key]))
 
         return alphabet_to_token, token_to_alphabet, alphabet_index, index_alphabet
 
     def build_mask(self, alphabet_index):
         # Build mask
-        mask_alphabet = {}
+        mask_alpha = {}
+        
         for key in self.alphabet:
-            mask_pressure = torch.zeros(self.max_alphabet_len)
-            mask_pressure[: len(self.alphabet[key].values)] = 1
-            mask_alphabet[alphabet_index[key]] = mask_pressure
+            mask_alphabet = torch.zeros(self.max_alphabet_len)
+            mask_alphabet[: len(self.alphabet[key])] = 1
+            mask_alpha[alphabet_index[key]] = mask_alphabet
 
-        return mask_alphabet
+        return mask_alpha
 
 
 def state_to_protocol(one_hot: torch.Tensor, vocab: Vocab) -> np.ndarray:
     protocol = []
     state_max_arg = torch.argmax(one_hot, dim=2).numpy()
 
-    for pressures_t in state_max_arg:
-        pressures = []
-        for i, token in enumerate(pressures_t):
-            pressures.append(vocab.token_to_alphabet[vocab.index_alphabet[i]][token])
-        protocol.append(pressures)
+    for alphabet_t in state_max_arg:
+        alphabet = []
+        for i, token in enumerate(alphabet_t):
+            alphabet.append(vocab.token_to_alphabet[vocab.index_alphabet[i]][token])
+        protocol.append(alphabet)
 
     return np.array(protocol)
 
@@ -93,11 +94,11 @@ def state_to_protocol(one_hot: torch.Tensor, vocab: Vocab) -> np.ndarray:
 def tokenize_protocol(protocol: List[Dict[str, float]], vocab: Vocab) -> List[Dict[str, int]]:
     tokenized_protocol = []
 
-    for pressures_t in protocol:
-        tokenized_pressures = []
-        for key in pressures_t.keys():
-            tokenized_pressures.append(vocab.alphabet_to_token[key][pressures_t[key]])
-        tokenized_protocol.append(tokenized_pressures)
+    for alphabet_t in protocol:
+        tokenized_alphabet = []
+        for key in alphabet_t.keys():
+            tokenized_alphabet.append(vocab.alphabet_to_token[key][alphabet_t[key]])
+        tokenized_protocol.append(tokenized_alphabet)
 
     return tokenized_protocol
 
@@ -105,27 +106,32 @@ def tokenize_protocol(protocol: List[Dict[str, float]], vocab: Vocab) -> List[Di
 def tokenize_tensor(tensor: torch.Tensor, vocab: Vocab) -> torch.Tensor:
     tokenized_tensor = torch.zeros(tensor.shape[0], tensor.shape[1], dtype=int)
 
+    # print("tensor = " + str(tensor))
     for i, pressures_t in enumerate(tensor):
         for j, pressure in enumerate(pressures_t):
-            projected_pr = vocab.alphabet[vocab.index_alphabet[j]].project(float(pressure.item()))
-            tokenized_tensor[i, j] = vocab.alphabet_to_token[vocab.index_alphabet[j]][projected_pr]
+            projected_pr_list = np.array(vocab.alphabet[vocab.index_alphabet[j]])
+            distances = np.abs(projected_pr_list - pressure.item())
+            min_arg = np.argmin(distances)
+            projection = projected_pr_list[min_arg]
+            tokenized_tensor[i, j] = vocab.alphabet_to_token[vocab.index_alphabet[j]][projection]
 
+    # print("tokenized tensor = " + str(tokenized_tensor))
     return tokenized_tensor
 
 
-def to_numpy(protocol_dict: List[Dict[str, int]], pressure_index) -> np.ndarray:
+def to_numpy(protocol_dict: List[Dict[str, int]], alphabet_index) -> np.ndarray:
     protocol_np = np.full((len(protocol_dict), len(protocol_dict[0])), np.nan)
 
     for t in range(len(protocol_dict)):
-        pressures = protocol_dict[t]
-        for key in pressures.keys():
-            protocol_np[t, pressure_index[key]] = pressures[key]
+        alphabets = protocol_dict[t]
+        for key in alphabets.keys():
+            protocol_np[t, alphabet_index[key]] = alphabets[key]
 
     return protocol_np
 
 
-def get_possible_protocols(pressure_set: Mapping[str, List], seq_len: int, init_protocol: OrderedDict):
-    param_grid = {key: pressure_set[key].pressures for key in pressure_set}
+def get_possible_protocols(alphabets: Mapping[str, List], seq_len: int, init_protocol: OrderedDict):
+    param_grid = {key: alphabets[key] for key in alphabets}
     possible_sets = list(ParameterGrid(param_grid))
 
     full_grid = list(product(possible_sets, repeat=seq_len))
@@ -135,14 +141,14 @@ def get_possible_protocols(pressure_set: Mapping[str, List], seq_len: int, init_
 
 
 def compute_reward_distribution(
-    pressure_set: Mapping[str, List],
+    alphabets: Mapping[str, List],
     reward_func: Callable,
     seq_len: int,
     init_protocol: OrderedDict,
     # vocab: Vocab,
 ):
     # Get possible protocols
-    possible_protocols = get_possible_protocols(pressure_set, seq_len, init_protocol)
+    possible_protocols = get_possible_protocols(alphabets, seq_len, init_protocol)
 
     # Compute expected reward distribution
     reward_distribution = {}
@@ -151,12 +157,10 @@ def compute_reward_distribution(
     dataset = []
 
     for i, protocol in enumerate(possible_protocols):
-        protocol_to_numpy = np.array([np.array(list(pressures.values())) for pressures in protocol])
+        protocol_to_numpy = np.array([np.array(list(alphabet.values())) for alphabet in protocol])
         protocol_tensor = torch.from_numpy(protocol_to_numpy).float()
         dataset.append(protocol_to_numpy)
         tensor_to_key[str(protocol_to_numpy)] = i
-        # token_tensor = tokenize_tensor(protocol_tensor, vocab)
-        # reward_distribution[i] = reward_func(F.one_hot(token_tensor, num_classes=vocab.num_tokens))
         reward_distribution[i] = reward_func(protocol_tensor)
         empirical_reward_distribution[i] = 0
 
@@ -299,7 +303,7 @@ class FlowGenerator(nn.Module):
         reward_func: Callable,
         num_episodes: int = 50000,
         t_start: int = 1,
-        early_stop_tolerance: int = 10,
+        early_stop_tolerance: int = 100,
         tb_losses: list = [],
         logZs: list = [],
     ) -> None:

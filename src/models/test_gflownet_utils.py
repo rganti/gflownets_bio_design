@@ -40,46 +40,39 @@ def reward_func(protocol):
 
 # %%
 # Running simplest test example
-pressure_set = OrderedDict(
+alphabet_set = OrderedDict(
     {
-        "ox": [0.0, 0.5, 1.5],  # 2.0, 3.0, 4.0, 5.0]),
-        "ph": [0.0, 0.5],  # , 2.0, 3.0]),
+        "ox": [0.0, 0.5, 1.5],
+        "ph": [0.0, 0.5],
     }
 )
 
 # %%
-vocab = Vocab(alphabet=pressure_set)
-max_seq_len = 2
-seq_len = max_seq_len + 1
-num_pressures = len(pressure_set)
+vocab = Vocab(alphabet=alphabet_set)
+
+# %%
+vocab.alphabet
+
+# %%
+seq_len = 3
+num_pressures = len(alphabet_set)
 num_tokens = vocab.num_tokens
 init_protocol = OrderedDict({"ox": 0.0, "ph": 0.0})  # , "stir": 0.0, "temp": 0.0})
 reward_distribution, empirical_reward_distribution, dataset_np, tensor_to_key = compute_reward_distribution(
-    pressure_set, reward_func, seq_len, init_protocol
+    alphabet_set, reward_func, seq_len, init_protocol
 )
 
 gt = np.array(list(reward_distribution.values()))
 
 index = len(dataset_np) // 2
 partial_dataset = StandardDataset(torch.from_numpy(dataset_np[:index]).float(), torch.from_numpy(gt[:index]).float())
-
 full_dataset = StandardDataset(torch.from_numpy(dataset_np).float(), torch.from_numpy(gt).float())
 
 # %%
-full_pressure_set = OrderedDict(
-    [
-        ("ph", Discrete(np.around(np.arange(0, 1, 0.05), 2))),
-        ("ox", Discrete(np.around(np.arange(0, 1, 0.05), 2))),
-        ("temp", Discrete(np.around(np.arange(0, 1, 0.05), 2))),
-        ("stir", Discrete(np.around(np.arange(0, 1, 0.05), 2))),
-    ]
-)
+gflownet = FlowGenerator(alphabet_set, seq_len, delta=0.1, test=True, verbose=False)
 
 # %%
-gflownet = FlowGenerator(pressure_set, seq_len, delta=0.1, test=True, verbose=False)
-
-# %%
-tb_losses, tb_mean_loss, logZs = gflownet.train(partial_dataset.x, reward_func, num_episodes=20000)
+tb_losses, tb_mean_loss, logZs = gflownet.train(partial_dataset.x, reward_func, num_episodes=10000)
 
 # %%
 # # %%
