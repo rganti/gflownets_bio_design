@@ -1,9 +1,19 @@
 GFlowNets_Bio_Design
 ==============================
 
-An implementation of GFlowNets for Biological Sequence Design inspired by Bengio paper.
+An implementation of GFlowNets for Biological Sequence Design inspired by
+Ref:
+Jain, Moksh, et al. "Biological sequence design with gflownets." International Conference on Machine Learning. PMLR, 2022.
 
-Project Organization
+First, setup the environment using
+```
+pip install -r requirements.txt
+```
+
+Then, run notebook test_gflownets.ipynb located in src/models/ to go through test example.
+
+
+<!-- Project Organization
 ------------
 
     ├── LICENSE
@@ -52,6 +62,6 @@ Project Organization
     └── tox.ini            <- tox file with settings for running tox; see tox.readthedocs.io
 
 
---------
+-------- -->
 
 <p><small>Project based on the <a target="_blank" href="https://drivendata.github.io/cookiecutter-data-science/">cookiecutter data science project template</a>. #cookiecutterdatascience</small></p>
