@@ -4,14 +4,14 @@ from collections import OrderedDict
 from src.models.gflownet_utils import (
     Vocab,
     FlowGenerator,
-    compute_reward_distribution,
+    compute_score_distribution,
     StandardDataset
 )
 import matplotlib.pyplot as pp
 import numpy as np
 
 # Get initial state
-def reward_func(protocol):
+def score_func(protocol):
 
     state_1 = torch.tensor([[0], [1], [1]])
     state_2 = torch.tensor([[0], [0], [0]])
@@ -56,12 +56,12 @@ vocab.alphabet
 seq_len = 3
 num_pressures = len(alphabet_set)
 num_tokens = vocab.num_tokens
-init_protocol = OrderedDict({"bases": 0})
-reward_distribution, empirical_reward_distribution, dataset_np, tensor_to_key = compute_reward_distribution(
-    alphabet_set, reward_func, seq_len, init_protocol
+init_sequence = OrderedDict({"bases": 0})
+score_distribution, empirical_score_distribution, dataset_np, tensor_to_key = compute_score_distribution(
+    alphabet_set, score_func, seq_len, init_sequence
 )
 
-gt = np.array(list(reward_distribution.values()))
+gt = np.array(list(score_distribution.values()))
 
 index = len(dataset_np) // 2
 partial_dataset = StandardDataset(torch.from_numpy(dataset_np[:index]).float(), torch.from_numpy(gt[:index]).float())
@@ -71,7 +71,7 @@ full_dataset = StandardDataset(torch.from_numpy(dataset_np).float(), torch.from_
 gflownet = FlowGenerator(alphabet_set, seq_len, delta=0.1, test=True, verbose=False)
 
 # %%
-tb_losses, tb_mean_loss, logZs = gflownet.train(partial_dataset.x, reward_func, num_episodes=10000)
+tb_losses, tb_mean_loss, logZs = gflownet.train(partial_dataset.x, score_func, num_episodes=10000)
 
 # %%
 # # %%
@@ -81,7 +81,7 @@ tb_losses, tb_mean_loss, logZs = gflownet.train(partial_dataset.x, reward_func, 
 # )
 
 # %%
-sum_rewards = np.sum([reward_func(protocol) for protocol in full_dataset.x])
+sum_rewards = np.sum([score_func(protocol) for protocol in full_dataset.x])
 
 # %%
 sum_rewards
@@ -116,26 +116,26 @@ tb_sampled_protocols = gflownet.sample(sample_len=1000)
 for gen_protocol in tb_sampled_protocols:
     if str(gen_protocol) in tensor_to_key:
         key = tensor_to_key[str(gen_protocol)]
-        empirical_reward_distribution[key] += 1
+        empirical_score_distribution[key] += 1
     else:
         print("Outside protocol!")
 
 
 # %%
 pp.bar(
-    list(empirical_reward_distribution.keys()),
-    np.array(list(empirical_reward_distribution.values())) / np.sum(list(empirical_reward_distribution.values())),
+    list(empirical_score_distribution.keys()),
+    np.array(list(empirical_score_distribution.values())) / np.sum(list(empirical_score_distribution.values())),
     label="Empirical",
     alpha=0.5,
 )
 pp.bar(
-    list(reward_distribution.keys()),
-    np.array(list(reward_distribution.values())) / np.sum(list(reward_distribution.values())),
+    list(score_distribution.keys()),
+    np.array(list(score_distribution.values())) / np.sum(list(score_distribution.values())),
     label="Expected",
     alpha=0.5,
 )
 
-pp.xticks(list(empirical_reward_distribution.keys()), list(empirical_reward_distribution.keys()), rotation="vertical")
+pp.xticks(list(empirical_score_distribution.keys()), list(empirical_score_distribution.keys()), rotation="vertical")
 pp.legend()
 
 # %%

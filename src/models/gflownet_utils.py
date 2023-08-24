@@ -15,9 +15,17 @@ from collections import OrderedDict
 from torch.utils.data import DataLoader, Dataset
 
 class StandardDataset(Dataset):
+    """Standard Dataset class that inherits attributes from Dataset.
+
+    Parameters
+    ----------
+    x: torch.Tensor
+        Dataset of sequences.
+    y: torch.Tensor
+        Scores.
+    """
     def __init__(self, x: torch.Tensor, y: torch.Tensor) -> None:
         super().__init__()
-        # Data Loading
         self.x = x
         self.y = y
 
@@ -32,6 +40,14 @@ class StandardDataset(Dataset):
 
 # Making tokenizer
 class Vocab(object):
+    """Vocab class that contains objects for tokenization.
+
+    Parameters
+    ----------
+    alphabet: Mapping[str, List]
+        Dictionary containing alphabet
+    """
+
     def __init__(
         self,
         alphabet: Mapping[str, List],
@@ -43,6 +59,9 @@ class Vocab(object):
         self.num_tokens = self.max_alphabet_len
 
     def build_vocab(self):
+        """Function for building tokenization dictionaries.        
+        """
+
         # Build vocabulary and find max alphabet length
         alphabet_to_token = {}
         token_to_alphabet = {}
@@ -67,6 +86,9 @@ class Vocab(object):
         return alphabet_to_token, token_to_alphabet, alphabet_index, index_alphabet
 
     def build_mask(self, alphabet_index):
+        """
+        Function for building a mask dictionary.
+        """
         # Build mask
         mask_alpha = {}
         
@@ -78,32 +100,44 @@ class Vocab(object):
         return mask_alpha
 
 
-def state_to_protocol(one_hot: torch.Tensor, vocab: Vocab) -> np.ndarray:
-    protocol = []
+def state_to_sequence(one_hot: torch.Tensor, vocab: Vocab) -> np.ndarray:
+    """
+    Function that takes one-hot encoded state and returns sequence.
+    """
+
+    sequence = []
     state_max_arg = torch.argmax(one_hot, dim=2).numpy()
 
     for alphabet_t in state_max_arg:
         alphabet = []
         for i, token in enumerate(alphabet_t):
             alphabet.append(vocab.token_to_alphabet[vocab.index_alphabet[i]][token])
-        protocol.append(alphabet)
+        sequence.append(alphabet)
 
-    return np.array(protocol)
+    return np.array(sequence)
 
 
-def tokenize_protocol(protocol: List[Dict[str, float]], vocab: Vocab) -> List[Dict[str, int]]:
-    tokenized_protocol = []
+def tokenize_sequence(sequence: List[Dict[str, float]], vocab: Vocab) -> List:
+    """
+    Function that accepts a list of keys and values and returns a list of tokenized_sequences.
+    """
 
-    for alphabet_t in protocol:
+    tokenized_sequence = []
+
+    for alphabet_t in sequence:
         tokenized_alphabet = []
         for key in alphabet_t.keys():
             tokenized_alphabet.append(vocab.alphabet_to_token[key][alphabet_t[key]])
-        tokenized_protocol.append(tokenized_alphabet)
+        tokenized_sequence.append(tokenized_alphabet)
 
-    return tokenized_protocol
+    return tokenized_sequence
 
 
 def tokenize_tensor(tensor: torch.Tensor, vocab: Vocab) -> torch.Tensor:
+    """
+    Function that accepts a sequence tensor and returns a tokenized tensor.
+    """
+
     tokenized_tensor = torch.zeros(tensor.shape[0], tensor.shape[1], dtype=int)
 
     for i, alphabet_t in enumerate(tensor):
@@ -117,54 +151,82 @@ def tokenize_tensor(tensor: torch.Tensor, vocab: Vocab) -> torch.Tensor:
     return tokenized_tensor
 
 
-def to_numpy(protocol_dict: List[Dict[str, int]], alphabet_index) -> np.ndarray:
-    protocol_np = np.full((len(protocol_dict), len(protocol_dict[0])), np.nan)
+def to_numpy(sequence_dict: List[Dict[str, int]], alphabet_index) -> np.ndarray:
+    """
+    Function that accepts sequence dictionary and returns a numpy sequence.
+    """
 
-    for t in range(len(protocol_dict)):
-        alphabets = protocol_dict[t]
+    sequence_np = np.full((len(sequence_dict), len(sequence_dict[0])), np.nan)
+
+    for t in range(len(sequence_dict)):
+        alphabets = sequence_dict[t]
         for key in alphabets.keys():
-            protocol_np[t, alphabet_index[key]] = alphabets[key]
+            sequence_np[t, alphabet_index[key]] = alphabets[key]
 
-    return protocol_np
+    return sequence_np
 
 
-def get_possible_protocols(alphabets: Mapping[str, List], seq_len: int, init_protocol: OrderedDict):
+def get_possible_sequences(alphabets: Mapping[str, List], seq_len: int, init_sequence: OrderedDict):
+    """
+    Function that uses a param_grid to generate all possible sequences of a given length for a given alphabet.
+    """
+
     param_grid = {key: alphabets[key] for key in alphabets}
     possible_sets = list(ParameterGrid(param_grid))
 
     full_grid = list(product(possible_sets, repeat=seq_len))
-    possible_protocols = [protocol for protocol in full_grid if protocol[0] == init_protocol]
+    possible_sequences = [sequence for sequence in full_grid if sequence[0] == init_sequence]
 
-    return possible_protocols
+    return possible_sequences
 
 
-def compute_reward_distribution(
+def compute_score_distribution(
     alphabets: Mapping[str, List],
-    reward_func: Callable,
+    score_func: Callable,
     seq_len: int,
-    init_protocol: OrderedDict,
+    init_sequence: OrderedDict,
 ):
-    # Get possible protocols
-    possible_protocols = get_possible_protocols(alphabets, seq_len, init_protocol)
+    """
+    Function that accepts alphabets, score_func, seq_len, and initial sequence and returns
+    the expected and observed score distributions.
+    """
+
+    # Get possible sequences
+    possible_sequences = get_possible_sequences(alphabets, seq_len, init_sequence)
 
     # Compute expected reward distribution
-    reward_distribution = {}
-    empirical_reward_distribution = {}
+    score_distribution = {}
+    empirical_score_distribution = {}
     tensor_to_key = {}
     dataset = []
 
-    for i, protocol in enumerate(possible_protocols):
-        protocol_to_numpy = np.array([np.array(list(alpha.values())) for alpha in protocol])
-        protocol_tensor = torch.from_numpy(protocol_to_numpy).float()
-        dataset.append(protocol_to_numpy)
-        tensor_to_key[str(protocol_to_numpy)] = i
-        reward_distribution[i] = reward_func(protocol_tensor)
-        empirical_reward_distribution[i] = 0
+    for i, sequence in enumerate(possible_sequences):
+        sequence_to_numpy = np.array([np.array(list(alpha.values())) for alpha in sequence])
+        sequence_tensor = torch.from_numpy(sequence_to_numpy).float()
+        dataset.append(sequence_to_numpy)
+        tensor_to_key[str(sequence_to_numpy)] = i
+        score_distribution[i] = score_func(sequence_tensor)
+        empirical_score_distribution[i] = 0
 
-    return reward_distribution, empirical_reward_distribution, np.array(dataset), tensor_to_key
+    return score_distribution, empirical_score_distribution, np.array(dataset), tensor_to_key
 
 
 class TBModelClosedLoop(nn.Module):
+    """
+    Parameters
+    ----------
+    vocab: Vocab
+        Instantiated vocabulary class containing tokenization and masking objects.
+    seq_len: int
+        Sequence length.
+    num_alphabets: int
+        Number of alphabets represented in the state.
+    num_tokens: int
+        Number of tokens (alphabet with max number of tokens).
+    num_hid: int
+        Number of hidden layers.
+    """
+
     def __init__(self, vocab: Vocab, seq_len: int, num_alphabets: int, num_tokens: int, num_hid: int):
         super().__init__()
         # The input dimension is seq_len * num_alphabets * num_tokens.
@@ -218,6 +280,32 @@ class TBModelClosedLoop(nn.Module):
 
 
 class FlowGenerator(nn.Module):
+    """
+    Implementation of GFlowNet training procedure based on Ref:
+    Jain, Moksh, et al. "Biological sequence design with gflownets." International Conference on Machine Learning. PMLR, 2022.
+
+    Parameters
+    ----------
+    alphabet: Mapping[str, List]
+        Dictionary containing alphabet
+    seq_len: int
+        Sequence length.
+    gamma: float
+        Proportion of online sequences to use for training.
+    delta: float
+        Exploration parameter that controls degree of sampling random actions.
+    lr: float
+        Learning rate for training.
+    minibatch_size: int
+        Minibatch size.
+    num_hid: int
+        Number of hidden layers to use in MLP.
+    verbose: bool
+        Flag for running training in verbose.
+    seed: int
+        Seed for setting up rng.
+    """
+
     def __init__(
         self,
         alphabet: Mapping[str, List],
@@ -227,7 +315,6 @@ class FlowGenerator(nn.Module):
         lr: float = 3e-4,
         minibatch_size: int = 32,
         num_hid: int = 512,
-        test: bool = False,
         verbose: bool = False,
         seed: int | None = None,
     ) -> None:
@@ -250,35 +337,34 @@ class FlowGenerator(nn.Module):
         self.delta = delta
         self.minibatch_size = minibatch_size
 
-        self.test = test
         self.verbose = verbose
         self.seed = seed
         self.rng = np.random.default_rng(self.seed)
-        self.experience_buffer = None
+        self.offline_data = None
 
-    def initialize_state(self, init_protocol: Mapping[str, float]) -> torch.Tensor:
+    def initialize_state(self, init_sequence: Mapping[str, float]) -> torch.Tensor:
 
-        tokenized_protocol = tokenize_protocol([init_protocol], self.vocab)
-        protocol_tensor = torch.tensor(tokenized_protocol, dtype=torch.long)
-        init_alphabet = F.one_hot(protocol_tensor, num_classes=self.num_tokens)
+        tokenized_sequence = tokenize_sequence([init_sequence], self.vocab)
+        sequence_tensor = torch.tensor(tokenized_sequence, dtype=torch.long)
+        init_alphabet = F.one_hot(sequence_tensor, num_classes=self.num_tokens)
         init_state = torch.zeros(self.seq_len, self.num_alphabet, self.num_tokens)
         init_state[0] = init_alphabet
 
         return init_state
 
-    def one_hot_encode(self, protocols: torch.Tensor) -> torch.Tensor:
-        protocols_one_hot = torch.zeros(protocols.shape[0], self.seq_len, self.num_alphabet, self.num_tokens)
+    def one_hot_encode(self, sequences: torch.Tensor) -> torch.Tensor:
+        sequences_one_hot = torch.zeros(sequences.shape[0], self.seq_len, self.num_alphabet, self.num_tokens)
 
-        for i in range(protocols_one_hot.shape[0]):
-            token_tensor = tokenize_tensor(protocols[i], self.vocab)
-            protocols_one_hot[i] = F.one_hot(token_tensor, num_classes=self.num_tokens)
+        for i in range(sequences_one_hot.shape[0]):
+            token_tensor = tokenize_tensor(sequences[i], self.vocab)
+            sequences_one_hot[i] = F.one_hot(token_tensor, num_classes=self.num_tokens)
 
-        return protocols_one_hot
+        return sequences_one_hot
 
     def get_initial_state(self) -> torch.Tensor:
         # Each episode starts with an "empty state" except for the first
         state = torch.zeros(self.seq_len, self.num_alphabet, self.num_tokens)
-        state[0] = self.experience_buffer[0][0]
+        state[0] = self.offline_data[0][0]
 
         return state
 
@@ -293,8 +379,8 @@ class FlowGenerator(nn.Module):
 
     def train(
         self,
-        protocols: torch.Tensor,
-        reward_func: Callable,
+        sequences: torch.Tensor,
+        score_func: Callable,
         num_episodes: int = 50000,
         t_start: int = 1,
         early_stop_tolerance: int = 100,
@@ -303,7 +389,7 @@ class FlowGenerator(nn.Module):
     ) -> None:
 
         # One hot encode dataset and build experience buffer
-        self.experience_buffer = self.one_hot_encode(protocols)
+        self.offline_data = self.one_hot_encode(sequences)
 
         tb_mean_loss = []
         tb_early_stop_loss = []
@@ -335,7 +421,7 @@ class FlowGenerator(nn.Module):
                 # Define total P_F
                 # total_P_F = 0
                 total_P_F = torch.zeros(len(minibatch_trajs))
-                rewards = torch.zeros(len(minibatch_trajs))
+                scores = torch.zeros(len(minibatch_trajs))
 
                 for t in range(t_start, self.seq_len):
                     for alpha in range(self.num_alphabet):
@@ -354,9 +440,9 @@ class FlowGenerator(nn.Module):
                         total_P_F += cat.log_prob(action)
 
                         if t == self.seq_len - 1 and alpha == self.num_alphabet - 1:
-                            for r in range(len(rewards)):
-                                rewards[r] = reward_func(
-                                    torch.from_numpy(state_to_protocol(minibatch_trajs[r], self.vocab)).float()
+                            for r in range(len(scores)):
+                                scores[r] = score_func(
+                                    torch.from_numpy(state_to_sequence(minibatch_trajs[r], self.vocab)).float()
                                 )
 
                         # Continue to next iteration with updated state
@@ -366,7 +452,7 @@ class FlowGenerator(nn.Module):
                 # sometimes be zero, instead of log(0) we'll clip the log-reward to -20.
                 # Using modified equation (11) from Ref. Jain et. al  since total_P_B = 0
 
-                loss = (self.model.logZ + total_P_F - torch.log(rewards).clip(-20)).pow(2).mean()
+                loss = (self.model.logZ + total_P_F - torch.log(scores).clip(-20)).pow(2).mean()
 
                 tb_losses.append(loss.item())
                 tb_early_stop_loss.append(loss.item())
@@ -453,8 +539,8 @@ class FlowGenerator(nn.Module):
 
         # Generate a random permutation of indices and choose the first 'num_choices' elements
         m_offline = self.minibatch_size - len(trajectories)
-        offline_indices = torch.randperm(len(self.experience_buffer))[:m_offline]
-        trajs_offline = self.experience_buffer[offline_indices]
+        offline_indices = torch.randperm(len(self.offline_data))[:m_offline]
+        trajs_offline = self.offline_data[offline_indices]
 
         # Concatenate the online and offline trajectories
         minibatch_trajs = torch.cat((trajs_offline, trajectories), dim=0)
@@ -465,12 +551,12 @@ class FlowGenerator(nn.Module):
         with torch.no_grad():
             self.model.eval()
 
-            tb_sampled_protocols = []
+            tb_sampled_sequences = []
 
             max_attempts = sample_len * 5
             attempts = 0
 
-            while len(tb_sampled_protocols) < sample_len:
+            while len(tb_sampled_sequences) < sample_len:
                 attempts += 1
                 state = self.get_initial_state()
 
@@ -497,14 +583,14 @@ class FlowGenerator(nn.Module):
                         # Continue to next iteration with updated state
                         state = new_state
 
-                # Append sampled protocol to list
-                tb_sampled_protocols.append(state)
+                # Append sampled sequence to list
+                tb_sampled_sequences.append(state)
 
-            if len(tb_sampled_protocols) > 0:
-                sampled_protocols = np.array(
-                    [state_to_protocol(state, self.vocab) for state in tb_sampled_protocols],
+            if len(tb_sampled_sequences) > 0:
+                sampled_sequences = np.array(
+                    [state_to_sequence(state, self.vocab) for state in tb_sampled_sequences],
                 )
             else:
-                sampled_protocols = np.array([])
+                sampled_sequences = np.array([])
 
-            return sampled_protocols
+            return sampled_sequences
